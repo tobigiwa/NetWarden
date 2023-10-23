@@ -13,7 +13,7 @@
 #include <bpf/bpf_helpers.h>
 
 SEC("sk_skb")
-int packet_capture_combined(struct __sk_buff *skb)
+int packet_capture(struct __sk_buff *skb)
 {
     struct ethhdr eth;
     struct iphdr ip;
@@ -54,9 +54,9 @@ char _license[] SEC("license") = "GPL";
 // #include <bpf/bpf_helpers.h>
 
 // SEC("sk_skb")
-// int packet_capture_combined(struct __sk_buff *skb)
+// int packet_capture_another(struct __sk_buff *skb)
 // {
-//     struct ethhdr *eth = bpf_hdr_pointer(skb);
+//     struct ethhdr *eth = bpf_hdr_pointer(skb); // seems unsafe???
 //     struct iphdr *ip = (struct iphdr *)(eth + 1);
 
 //     __u32 packet_size = skb->len;
