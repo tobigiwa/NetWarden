@@ -1,0 +1,41 @@
+└> sudo bpftool -d prog load ebpf_bytecode.o  /sys/fs/bpf/ebpf_bytecode
+[sudo] password for tobigiwa: 
+libbpf: loading ebpf_bytecode.o
+libbpf: elf: section(3) sk_skb, size 1032, link 0, flags 6, type=1
+libbpf: sec 'sk_skb': found program 'packet_capture__' at insn offset 0 (0 bytes), code size 129 insns (1032 bytes)
+libbpf: elf: section(4) .relsk_skb, size 80, link 9, flags 40, type=9
+libbpf: elf: section(5) .data, size 40, link 0, flags 3, type=1
+libbpf: elf: section(6) .rodata.str1.1, size 101, link 0, flags 32, type=1
+libbpf: elf: section(7) license, size 4, link 0, flags 3, type=1
+libbpf: license of ebpf_bytecode.o is GPL
+libbpf: elf: section(9) .symtab, size 240, link 1, flags 0, type=2
+libbpf: looking for externs among 10 symbols...
+libbpf: collected 0 externs total
+libbpf: map 'ebpf_byt.data' (global data): at sec_idx 5, offset 0, flags 0.
+libbpf: map 0 is "ebpf_byt.data"
+libbpf: map '.rodata.str1.1' (global data): at sec_idx 6, offset 0, flags 80.
+libbpf: map 1 is ".rodata.str1.1"
+libbpf: sec '.relsk_skb': collecting relocation for section(3) 'sk_skb'
+libbpf: sec '.relsk_skb': relo #0: insn #1 against '.data'
+libbpf: prog 'packet_capture__': found data map 0 (ebpf_byt.data, sec 5, off 0) for insn 1
+libbpf: sec '.relsk_skb': relo #1: insn #29 against '.data'
+libbpf: prog 'packet_capture__': found data map 0 (ebpf_byt.data, sec 5, off 0) for insn 29
+libbpf: sec '.relsk_skb': relo #2: insn #39 against '.data'
+libbpf: prog 'packet_capture__': found data map 0 (ebpf_byt.data, sec 5, off 0) for insn 39
+libbpf: sec '.relsk_skb': relo #3: insn #45 against '.data'
+libbpf: prog 'packet_capture__': found data map 0 (ebpf_byt.data, sec 5, off 0) for insn 45
+libbpf: sec '.relsk_skb': relo #4: insn #70 against '.data'
+libbpf: prog 'packet_capture__': found data map 0 (ebpf_byt.data, sec 5, off 0) for insn 70
+libbpf: map 'ebpf_byt.data': created successfully, fd=3
+libbpf: map '.rodata.str1.1': created successfully, fd=4
+libbpf: prog 'packet_capture__': BPF program load failed: Invalid argument
+libbpf: prog 'packet_capture__': -- BEGIN PROG LOAD LOG --
+func#0 @0
+unknown opcode 8d
+verification time 42 usec
+stack depth 0
+processed 0 insns (limit 1000000) max_states_per_insn 0 total_states 0 peak_states 0 mark_read 0
+-- END PROG LOAD LOG --
+libbpf: prog 'packet_capture__': failed to load: -22
+libbpf: failed to load object 'ebpf_bytecode.o'
+Error: failed to load object file
