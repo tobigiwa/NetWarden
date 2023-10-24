@@ -1,3 +1,7 @@
 *.out
 j.c
 .vscode/
+libbpf-bootstrap/
+another.c
+*.o
+tmp.c
