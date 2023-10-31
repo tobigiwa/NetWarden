@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +26,7 @@ func main() {
 		cmdOutput, err := cmd.CombinedOutput()
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "cannot check if internet is available: %s\n", err)
+			fmt.Fprintln(os.Stderr, "cannot check if internet is available")
 			continue
 		}
 
@@ -45,78 +43,108 @@ func main() {
 	}
 
 	ticker.Stop()
-	// networkCapture()
-	processWatch()
-
+	_ = networkCapture()
+	fmt.Println("CAPTURE ENDED")
 }
 
-func networkCapture() {
+func networkCapture() int {
 	openDevice := inUseInternetDeviceInterface()
 
 	var wg sync.WaitGroup
 	wg.Add(len(openDevice))
 
+	count := 0
 	for _, device := range openDevice {
 		newDevice := device
 		if handle := openNetworkDevice(newDevice); handle != nil {
 			newHandle := handle
 
+			count++
+			fmt.Printf("\n%d is fired.\n", count)
 			go func(handle *pcap.Handle, wg *sync.WaitGroup, device string) {
+				defer func() {
+					fmt.Println("this goroutine is comming to it end")
+				}()
 				defer wg.Done()
 				defer handle.Close()
 
 				packSource := gopacket.NewPacketSource(handle, handle.LinkType())
 				for packet := range packSource.Packets() {
 
-					// Handle IPv6 layer.
-					if ip6Layer := packet.Layer(layers.LayerTypeIPv6); ip6Layer != nil {
-						ip6, _ := ip6Layer.(*layers.IPv6)
-						fmt.Printf("%s\n", strings.Repeat("-", 7))
-						fmt.Printf("IPv6: %s -> %s\n", ip6.SrcIP, ip6.DstIP)
-						fmt.Printf("packet from device: %s, the cost of fetching this packet is %d bytes\n", newDevice, packet.Metadata().Length)
-						fmt.Printf("%s\n", strings.Repeat("-", 7))
-					} else if icmpLayer := packet.Layer(layers.LayerTypeICMPv4); icmpLayer != nil {
-						// Handle ICMP layer.
-						icmp4, _ := icmpLayer.(*layers.ICMPv4)
-						fmt.Printf("%s\n", strings.Repeat("-", 7))
-						fmt.Printf("ICMP: Type %d Code %d\n", icmp4.TypeCode.Type(), icmp4.TypeCode.Code())
-						fmt.Printf("packet from device: %s, the cost of fetching this packet is %d bytes\n", newDevice, packet.Metadata().Length)
-						fmt.Printf("%s\n", strings.Repeat("-", 7))
-					} else if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
-						// Handle UDP layer.
-						udp, _ := udpLayer.(*layers.UDP)
-						fmt.Printf("%s\n", strings.Repeat("-", 7))
-						fmt.Printf("UDP: %d -> %d\n", udp.SrcPort, udp.DstPort)
-						fmt.Printf("packet from device: %s, the cost of fetching this packet is %d bytes\n", newDevice, packet.Metadata().Length)
-						fmt.Printf("%s\n", strings.Repeat("-", 7))
+					var (
+						srcIP      string
+						dstIP      string
+						protocol   string
+						srcPort    string
+						dstPort    string
+						packetSize = packet.Metadata().Length
+					)
 
-					} else if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
-						tcp, _ := tcpLayer.(*layers.TCP)
-						fmt.Printf("%s\n", strings.Repeat("-", 7))
-						fmt.Printf("TCP: 😎%d -> %d Sequence number : %d \n", tcp.SrcPort, tcp.DstPort, tcp.Seq)
-						fmt.Printf("packet from device: %s, the cost of fetching this packet is %d bytes\n", newDevice, packet.Metadata().Length)
-						fmt.Printf("%s\n", strings.Repeat("-", 7))
-
-					} else if ip4Layer := packet.Layer(layers.LayerTypeIPv4); ip4Layer != nil {
-						// Handle IPv4 layer.
+					// Handle IPv4 layer.
+					if ip4Layer := packet.Layer(layers.LayerTypeIPv4); ip4Layer != nil {
 						ip4, _ := ip4Layer.(*layers.IPv4)
-						fmt.Printf("%s\n", strings.Repeat("-", 7))
-						fmt.Printf("IPv4 😊: %s -> %s protocol %s\n", ip4.SrcIP, ip4.DstIP, ip4.Protocol)
-						fmt.Printf("packet from device: %s, the cost of fetching this packet is %d bytes\n", newDevice, packet.Metadata().Length)
-						fmt.Printf("%s\n", strings.Repeat("-", 7))
-					} else {
-						// Handle other cases.
-						fmt.Printf("\n%sOTHER TYPE OF PACKET%s\n", strings.Repeat("-", 7), strings.Repeat("-", 7))
 
+						srcIP = ip4.SrcIP.String()
+						dstIP = ip4.DstIP.String()
+						protocol = ip4.Protocol.String()
+
+						// Handle IPv6 layer.
+					} else if ip6Layer := packet.Layer(layers.LayerTypeIPv6); ip6Layer != nil {
+						ip6, _ := ip6Layer.(*layers.IPv4)
+
+						srcIP = ip6.SrcIP.String()
+						dstIP = ip6.DstIP.String()
+						protocol = ip6.Protocol.String()
+
+						// Unknown
+					} else {
+						fmt.Printf("\n%s\nOTHER TYPE OF PACKET: \n%+v\n %s\n", strings.Repeat("-", 20), packet, strings.Repeat("-", 20))
+						continue
 					}
+
+					portInfo := handleTransportLayer(packet)
+					srcPort = portInfo.SrcPort
+					dstPort = portInfo.DstPort
+
+					fmt.Printf("%s\n", strings.Repeat("-", 7))
+					fmt.Printf("%s 😊: src :%s:%s -> dst: %s:%s\n", protocol, srcIP, srcPort, dstIP, dstPort)
+					fmt.Printf("packet from device: %s, the cost of fetching this packet is %d bytes\n", newDevice, packetSize)
+					fmt.Printf("%s\n", strings.Repeat("-", 7))
+
 				}
 
 			}(newHandle, &wg, newDevice)
 		}
+		fmt.Printf("Goroutine for device interface: %s, is fired and polling\n", device)
 	}
 
+	fmt.Printf("waiting on %d interface\n", len(openDevice))
 	wg.Wait()
+	fmt.Println("Got to the end")
+	return 1
+}
 
+type portInformation struct {
+	SrcPort, DstPort string
+}
+
+func handleTransportLayer(packet gopacket.Packet) portInformation {
+
+	// Handle TCP layer
+	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
+		tcp, _ := tcpLayer.(*layers.TCP)
+
+		return portInformation{strconv.Itoa(int(tcp.SrcPort)), strconv.Itoa(int(tcp.DstPort))}
+	}
+
+	// Handle UDP layer.
+	if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
+		udp, _ := udpLayer.(*layers.UDP)
+
+		return portInformation{strconv.Itoa(int(udp.SrcPort)), strconv.Itoa(int(udp.DstPort))}
+	}
+
+	return portInformation{"NO-SOURCE-PORT", "NO-DEST-PORT"}
 }
 func inUseInternetDeviceInterface() []string {
 	cmd := exec.Command("sh", "-c", "ip route | awk '/default/ {print $5}'") // ip route | awk '/default/ {print $5}'
@@ -137,65 +165,65 @@ func openNetworkDevice(device string) *pcap.Handle {
 	return handle
 }
 
-func processWatch() {
+// func processWatch() {
 
-}
+// }
 
-func validateInode(inodeNumber string) int {
+// func validateInode(inodeNumber string) int {
 
-	pattern := `^\d+$`
-	var (
-		inodeNo int
-		err     error
-	)
-	compiledPattern := regexp.MustCompile(pattern)
-	if match := compiledPattern.MatchString(inodeNumber); !match {
-		return -1
-	}
-	if inodeNo, err = strconv.Atoi(inodeNumber); err != nil {
-		return -1
-	}
-	return inodeNo
+// 	pattern := `^\d+$`
+// 	var (
+// 		inodeNo int
+// 		err     error
+// 	)
+// 	compiledPattern := regexp.MustCompile(pattern)
+// 	if match := compiledPattern.MatchString(inodeNumber); !match {
+// 		return -1
+// 	}
+// 	if inodeNo, err = strconv.Atoi(inodeNumber); err != nil {
+// 		return -1
+// 	}
+// 	return inodeNo
 
-}
-func NoOflinesInFile(filePath string, ch chan<- intChannelResponse) {
-	fileContent, err := os.ReadFile(filePath)
-	if err != nil {
-		ch <- intChannelResponse{0, err}
-	}
-	ch <- intChannelResponse{len(strings.Split(string(fileContent), "\n")),
-		nil}
-}
+// }
+// func NoOflinesInFile(filePath string, ch chan<- intChannelResponse) {
+// 	fileContent, err := os.ReadFile(filePath)
+// 	if err != nil {
+// 		ch <- intChannelResponse{0, err}
+// 	}
+// 	ch <- intChannelResponse{len(strings.Split(string(fileContent), "\n")),
+// 		nil}
+// }
 
-func processesOnTCP(networkType string) ([]string, error) {
+// func processesOnTCP(networkType string) ([]string, error) {
 
-	getLinelength := make(chan intChannelResponse)
-	go NoOflinesInFile(networkType, getLinelength)
+// 	getLinelength := make(chan intChannelResponse)
+// 	go NoOflinesInFile(networkType, getLinelength)
 
-	file, err := os.Open(networkType)
-	if err != nil {
-		return nil, fmt.Errorf("could not open system process at %s: ERROR: %s", networkType, err)
-	}
-	defer file.Close()
+// 	file, err := os.Open(networkType)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("could not open system process at %s: ERROR: %s", networkType, err)
+// 	}
+// 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		fields := strings.Fields(line)
-		if len(fields) < 10 {
-			continue // This line doesn't have enough fields, skip it
-		}
-		inode := fields[9]
-		fmt.Println("Inode:", inode)
-	}
+// 	scanner := bufio.NewScanner(file)
+// 	for scanner.Scan() {
+// 		line := scanner.Text()
+// 		fields := strings.Fields(line)
+// 		if len(fields) < 10 {
+// 			continue // This line doesn't have enough fields, skip it
+// 		}
+// 		inode := fields[9]
+// 		fmt.Println("Inode:", inode)
+// 	}
 
-	if err := scanner.Err(); err != nil {
-		fmt.Println("error reading file:", err)
-	}
-	return nil, nil
-}
+// 	if err := scanner.Err(); err != nil {
+// 		fmt.Println("error reading file:", err)
+// 	}
+// 	return nil, nil
+// }
 
-type intChannelResponse struct {
-	Result int
-	Error  error
-}
+// type intChannelResponse struct {
+// 	Result int
+// 	Error  error
+// }
