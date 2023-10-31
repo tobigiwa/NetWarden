@@ -14,7 +14,7 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
-func main() {
+func mai() {
 	internetIsAvailable := false
 
 	ticker := time.NewTicker(2 * time.Second)
@@ -43,8 +43,7 @@ func main() {
 	}
 
 	ticker.Stop()
-	a := networkCapture()
-	fmt.Printf("CAPTURE ENDED, goroutine fired %d", a)
+	networkCapture()
 }
 
 func networkCapture() int {
@@ -164,4 +163,5 @@ func openNetworkDevice(device string) *pcap.Handle {
 	}
 	return handle
 }
+
 
