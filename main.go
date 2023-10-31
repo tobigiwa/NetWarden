@@ -43,8 +43,8 @@ func main() {
 	}
 
 	ticker.Stop()
-	_ = networkCapture()
-	fmt.Println("CAPTURE ENDED")
+	a := networkCapture()
+	fmt.Printf("CAPTURE ENDED, goroutine fired %d", a)
 }
 
 func networkCapture() int {
@@ -90,11 +90,11 @@ func networkCapture() int {
 
 						// Handle IPv6 layer.
 					} else if ip6Layer := packet.Layer(layers.LayerTypeIPv6); ip6Layer != nil {
-						ip6, _ := ip6Layer.(*layers.IPv4)
+						ip6, _ := ip6Layer.(*layers.IPv6)
 
 						srcIP = ip6.SrcIP.String()
 						dstIP = ip6.DstIP.String()
-						protocol = ip6.Protocol.String()
+						protocol = ip6.NextHeader.String()
 
 						// Unknown
 					} else {
@@ -121,7 +121,7 @@ func networkCapture() int {
 	fmt.Printf("waiting on %d interface\n", len(openDevice))
 	wg.Wait()
 	fmt.Println("Got to the end")
-	return 1
+	return count
 }
 
 type portInformation struct {
@@ -165,65 +165,3 @@ func openNetworkDevice(device string) *pcap.Handle {
 	return handle
 }
 
-// func processWatch() {
-
-// }
-
-// func validateInode(inodeNumber string) int {
-
-// 	pattern := `^\d+$`
-// 	var (
-// 		inodeNo int
-// 		err     error
-// 	)
-// 	compiledPattern := regexp.MustCompile(pattern)
-// 	if match := compiledPattern.MatchString(inodeNumber); !match {
-// 		return -1
-// 	}
-// 	if inodeNo, err = strconv.Atoi(inodeNumber); err != nil {
-// 		return -1
-// 	}
-// 	return inodeNo
-
-// }
-// func NoOflinesInFile(filePath string, ch chan<- intChannelResponse) {
-// 	fileContent, err := os.ReadFile(filePath)
-// 	if err != nil {
-// 		ch <- intChannelResponse{0, err}
-// 	}
-// 	ch <- intChannelResponse{len(strings.Split(string(fileContent), "\n")),
-// 		nil}
-// }
-
-// func processesOnTCP(networkType string) ([]string, error) {
-
-// 	getLinelength := make(chan intChannelResponse)
-// 	go NoOflinesInFile(networkType, getLinelength)
-
-// 	file, err := os.Open(networkType)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("could not open system process at %s: ERROR: %s", networkType, err)
-// 	}
-// 	defer file.Close()
-
-// 	scanner := bufio.NewScanner(file)
-// 	for scanner.Scan() {
-// 		line := scanner.Text()
-// 		fields := strings.Fields(line)
-// 		if len(fields) < 10 {
-// 			continue // This line doesn't have enough fields, skip it
-// 		}
-// 		inode := fields[9]
-// 		fmt.Println("Inode:", inode)
-// 	}
-
-// 	if err := scanner.Err(); err != nil {
-// 		fmt.Println("error reading file:", err)
-// 	}
-// 	return nil, nil
-// }
-
-// type intChannelResponse struct {
-// 	Result int
-// 	Error  error
-// }
