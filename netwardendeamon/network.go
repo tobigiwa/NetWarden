@@ -1,4 +1,11 @@
-package main
+/*
+ * Copyright (c) 2023, Oluwatobi Giwa
+ * All rights reserved.
+ *
+ * This software is licensed under the 3-Clause BSD License.
+ * See the LICENSE file or visit https://opensource.org/license/bsd-3-clause/ for details.
+ */
+package netwardendeamon
 
 import (
 	"fmt"
@@ -19,66 +26,39 @@ import (
 
 var allPacketReceived, allPacketAccounted, allPacketUnaccounted, allPacketLost, allPacketGet atomic.Int64
 
-func main() {
+func Start() {
+
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "Not all processes could be identified, you would need root priviledges.")
+		os.Exit(1)
+	}
+
 	exit := make(chan os.Signal, 1)
 	done := make(chan bool, 1)
+	signal.Notify(exit, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGSTOP, syscall.SIGINT)
+
+	defer close(done)
+	defer close(exit)
 
 	go func() {
-		kill := <-exit
-		fmt.Println(kill)
-		close(exit)
+		<-exit
 		done <- true
 	}()
 
+	CheckNetworkAvailable()
+
 	startTime := time.Now()
-	signal.Notify(exit, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGSTOP, syscall.SIGINT)
 
-	go func() {
-
-		if os.Geteuid() != 0 {
-			fmt.Fprintln(os.Stderr, "Not all processes could be identified, you would need root priviledges.")
-			os.Exit(1)
-		}
-
-		internetIsAvailable := false
-
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-
-		for ; !internetIsAvailable; <-ticker.C {
-
-			cmd := exec.Command("ping", "-c 1", "8.8.8.8")
-			cmdOutput, err := cmd.CombinedOutput()
-
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "internet does seems not to be available")
-				continue
-			}
-
-			stringCmdOutput := string(cmdOutput)
-			if strings.Contains(stringCmdOutput, "ping: connect: Network is unreachable") { // No internet connection...
-				fmt.Println("no internet")
-				continue
-			}
-
-			if strings.Contains(stringCmdOutput, "1 packets transmitted, 1 received") { // hurray!!!, internet here we go...
-				internetIsAvailable = true
-			}
-		}
-
-		ticker.Stop()
-		networkCapture()
-	}()
+	go networkCapture()
 
 	<-done
-	close(done)
+
 	endTime := time.Now()
 	timeDiff := endTime.Sub(startTime)
-	account()
-	fmt.Printf("Time difference: %s\n", timeDiff)
 
+	account(timeDiff)
+	return
 }
-
 func networkCapture() {
 
 	openDevice := inUseInternetDeviceInterface()
@@ -169,19 +149,44 @@ func resolvePacketToProcess(capturedPacket netowrkPacket) {
 				capturedPacket.dstIP == p.Ip &&
 				capturedPacket.dstPort == fmt.Sprintf("%d", p.Port)) { // response maybe...
 
-			// fmt.Printf("%s\n", strings.Repeat("-", 15))
-			// fmt.Printf("packet protocol is %s\n", capturedPacket.protocol)
-			// fmt.Printf("this packet belongs to %s\n", strings.ToUpper(strings.TrimSpace(p.Name)))
-			// fmt.Printf("PROCESS SIDE: %s 😊: local :%s:%s -> foreign: %s:%s\n", p.Name, p.Ip, fmt.Sprintf("%d", p.Port), p.ForeignIp, fmt.Sprintf("%d", p.ForeignPort))
-			// fmt.Printf("PACKET SIDE :%s 😊: src :%s:%s -> dst: %s:%s of size %d\n", capturedPacket.protocol, capturedPacket.srcIP, capturedPacket.srcPort, capturedPacket.dstIP, capturedPacket.dstPort, capturedPacket.packetSize)
-			// fmt.Printf("%s\n\n\n", strings.Repeat("-", 15))
 			allPacketAccounted.Add(1)
 			return
 		}
 	}
 
-	fmt.Printf("PACKET WASTED %s\n%s 😊: src :%s:%s -> dst: %s:%s of size %d\n%s\n\n\n", strings.Repeat("*", 15), capturedPacket.protocol, capturedPacket.srcIP, capturedPacket.srcPort, capturedPacket.dstIP, capturedPacket.dstPort, capturedPacket.packetSize, strings.Repeat("*", 15))
 	allPacketUnaccounted.Add(1)
+	return
+}
+
+func CheckNetworkAvailable() {
+	
+	internetIsAvailable := false
+	
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	
+	for ; !internetIsAvailable; <-ticker.C {
+		
+		cmd := exec.Command("ping", "-c 1", "8.8.8.8")
+		cmdOutput, err := cmd.CombinedOutput()
+		
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "internet does seems not to be available")
+			continue
+		}
+		
+		stringCmdOutput := string(cmdOutput)
+		if strings.Contains(stringCmdOutput, "ping: connect: Network is unreachable") { // No internet connection...
+			fmt.Println("no internet")
+			continue
+		}
+		
+		if strings.Contains(stringCmdOutput, "1 packets transmitted, 1 received") { // hurray!!!, internet here we go...
+			internetIsAvailable = true
+		}
+	}
+	
+	ticker.Stop()
 	return
 }
 
@@ -199,21 +204,21 @@ type netowrkPacket struct {
 }
 
 func handleTransportLayer(packet gopacket.Packet) portInformation {
-
+	
 	// Handle TCP layer
 	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
 		tcp, _ := tcpLayer.(*layers.TCP)
-
+		
 		return portInformation{strconv.Itoa(int(tcp.SrcPort)), strconv.Itoa(int(tcp.DstPort))}
 	}
-
+	
 	// Handle UDP layer.
 	if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
 		udp, _ := udpLayer.(*layers.UDP)
-
+		
 		return portInformation{strconv.Itoa(int(udp.SrcPort)), strconv.Itoa(int(udp.DstPort))}
 	}
-
+	
 	return portInformation{"NO-SOURCE-PORT", "NO-DEST-PORT"}
 }
 func inUseInternetDeviceInterface() []string {
@@ -235,23 +240,34 @@ func openNetworkDevice(device string) *pcap.Handle {
 	return handle
 }
 
-func account() {
+func account(timeDiff time.Duration) {
 	fmt.Printf("%s\n", strings.Repeat("-", 30))
-	fmt.Printf("Percantage Accounted for: %d\n", percentageCalc(&allPacketAccounted, &allPacketGet))
-	fmt.Printf("Percantage Unaccounted for: %d\n", percentageCalc(&allPacketUnaccounted, &allPacketGet))
-	fmt.Printf("Percantage Lost for: %d\n", percentageCalc(&allPacketLost, &allPacketGet))
+	fmt.Printf("Percentage Accounted for: %d\n", percentageCalc(&allPacketAccounted, &allPacketGet))
+	fmt.Printf("Percentage Unaccounted for: %d\n", percentageCalc(&allPacketUnaccounted, &allPacketGet))
+	fmt.Printf("Percentage Lost for: %d\n", percentageCalc(&allPacketLost, &allPacketGet))
 	fmt.Printf("All the packet we got %d\n", &allPacketReceived)
 	fmt.Printf("%s", strings.Repeat("-", 30))
+	fmt.Printf("TIME: %s\n", timeDiff)
 }
 
 func percentageCalc(dividend, divisor *atomic.Int64) int64 {
 	fmt.Println(dividend, divisor)
 	dividendValue := float64(dividend.Load())
 	divisorValue := float64(divisor.Load())
-
+	
 	if divisorValue == 0 {
 		return 0 // Handle division by zero to avoid NaN
 	}
-
+	
 	return int64((dividendValue / divisorValue) * 100)
 }
+
+// fmt.Printf("%s\n", strings.Repeat("-", 15))
+// fmt.Printf("packet protocol is %s\n", capturedPacket.protocol)
+// fmt.Printf("this packet belongs to %s\n", strings.ToUpper(strings.TrimSpace(p.Name)))
+// fmt.Printf("PROCESS SIDE: %s 😊: local :%s:%s -> foreign: %s:%s\n", p.Name, p.Ip, fmt.Sprintf("%d", p.Port), p.ForeignIp, fmt.Sprintf("%d", p.ForeignPort))
+// fmt.Printf("PACKET SIDE :%s 😊: src :%s:%s -> dst: %s:%s of size %d\n", capturedPacket.protocol, capturedPacket.srcIP, capturedPacket.srcPort, capturedPacket.dstIP, capturedPacket.dstPort, capturedPacket.packetSize)
+// fmt.Printf("%s\n\n\n", strings.Repeat("-", 15))
+
+
+// fmt.Printf("PACKET WASTED %s\n%s 😊: src :%s:%s -> dst: %s:%s of size %d\n%s\n\n\n", strings.Repeat("*", 15), capturedPacket.protocol, capturedPacket.srcIP, capturedPacket.srcPort, capturedPacket.dstIP, capturedPacket.dstPort, capturedPacket.packetSize, strings.Repeat("*", 15))
