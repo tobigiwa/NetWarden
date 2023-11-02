@@ -8,50 +8,57 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 )
 
 const (
-	stringPathToPRocNetFiles string = "/proc/net/"
-	globaPatternMatchForIPv4 string = "*[tu][cd][p]"
-	globaPatternMatchForIPv6 string = "*[tu][cd][p]6"
+	stringPathToPRocNetFiles = "/proc/net/"
+	globaPatternMatchForIPv4 = "*[tu][cd][p]"
+	globaPatternMatchForIPv6 = "*[tu][cd][p]6"
+
+	globPattern = "/proc/net/{tcp*,udp*}"
 )
 
-var ProcRoot = "/proc"
+// func main() {
 
-func main() {
-	if os.Geteuid() != 0 {
-		fmt.Fprintln(os.Stderr, "Not all processes could be identified, you would need root priviledges.")
-		os.Exit(1)
+// 	d := netStat()
+
+// 	fmt.Printf("Proto %16s %20s %14s %24s\n", "Local Adress", "Foregin Adress",
+// 		"State", "Pid/Program")
+
+// 	for _, p := range d {
+// 		ip_port := fmt.Sprintf("%v:%v", p.Ip, p.Port)
+// 		fip_port := fmt.Sprintf("%v:%v", p.ForeignIp, p.ForeignPort)
+// 		pid_program := fmt.Sprintf("%v/%v", p.Pid, p.Name)
+// 		fmt.Printf("- %16v %20v %16v %20v\n", ip_port, fip_port,
+// 			p.State, pid_program)
+// 	}
+// }
+
+func netStat() []Process {
+
+	networkData := readProcNetFile(procNetfilePaths())
+	Processes := make([]Process, len(networkData))
+	res := make(chan Process, len(networkData))
+
+	currProcesses := getAllCurrProcess()
+
+	for _, line := range networkData {
+		go correlateProcessToSocket(line, &currProcesses, res)
 	}
 
-	d := netStat(stringPathToPRocNetFiles, globaPatternMatchForIPv6)
-
-	fmt.Printf("Proto %16s %20s %14s %24s\n", "Local Adress", "Foregin Adress",
-		"State", "Pid/Program")
-
-	for _, p := range d {
-
-		ip_port := fmt.Sprintf("%v:%v", p.Ip, p.Port)
-		fip_port := fmt.Sprintf("%v:%v", p.ForeignIp, p.ForeignPort)
-		pid_program := fmt.Sprintf("%v/%v", p.Pid, p.Name)
-
-		fmt.Printf("tcp %16v %20v %16v %20v\n", ip_port, fip_port,
-			p.State, pid_program)
+	for i := range networkData {
+		p := <-res
+		Processes[i] = p
 	}
+
+	return Processes
 }
 
-func readProcNetFile(protocol, pattern string) []string {
+func readProcNetFile(filepaths []string) []string {
 
-	globFileForIPv4s, err := filepath.Glob(filepath.Join(protocol, pattern))
-	container := make([]string, len(globFileForIPv4s))
-	if err != nil {
-		panic(err)
-	}
-	for _, globFlie := range globFileForIPv4s {
-		data, err := os.ReadFile(globFlie)
+	container := make([]string, 0, 20)
+	for _, filepath := range filepaths {
+		data, err := os.ReadFile(filepath)
 		if err != nil {
 			panic(err)
 		}
@@ -61,6 +68,16 @@ func readProcNetFile(protocol, pattern string) []string {
 	}
 
 	return container[2:]
+}
+
+func procNetfilePaths() []string {
+
+	var filePaths []string
+	tcpAndudp, _ := filepath.Glob(filepath.Join("/proc/net/", globaPatternMatchForIPv4))
+	tcp6Andudp6, _ := filepath.Glob(filepath.Join("/proc/net/", globaPatternMatchForIPv6))
+	filePaths = append(tcpAndudp, tcp6Andudp6...)
+
+	return filePaths
 }
 
 func currProcessDescriptors() []string {
@@ -95,26 +112,6 @@ func getAllCurrProcess() []processInode {
 
 type processInode struct {
 	path, symlink string
-}
-
-func netStat(protocol, pattern string) []Process {
-
-	networkData := readProcNetFile(protocol, pattern)
-	Processes := make([]Process, len(networkData))
-	res := make(chan Process, len(networkData))
-
-	currProcesses := getAllCurrProcess()
-
-	for _, line := range networkData {
-		go correlateProcessToSocket(line, &currProcesses, res)
-	}
-
-	for i := range networkData {
-		p := <-res
-		Processes[i] = p
-	}
-
-	return Processes
 }
 
 type Process struct {
@@ -223,8 +220,7 @@ func getProcessExe(pid string) string {
 
 func getProcessName(pid string) string {
 	processName, _ := os.ReadFile(fmt.Sprintf("/proc/%s/comm", pid))
-	caser := cases.Title(language.AmericanEnglish)
-	return caser.String(string(processName))
+	return strings.ToTitle(string(processName))
 
 }
 

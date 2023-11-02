@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/gopacket"
@@ -14,52 +17,80 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
-func mai() {
-	internetIsAvailable := false
+var allPacketReceived, allPacketAccounted, allPacketUnaccounted, allPacketLost, allPacketGet atomic.Int64
 
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+func main() {
+	exit := make(chan os.Signal, 1)
+	done := make(chan bool, 1)
 
-	for ; !internetIsAvailable; <-ticker.C {
+	go func() {
+		kill := <-exit
+		fmt.Println(kill)
+		close(exit)
+		done <- true
+	}()
 
-		cmd := exec.Command("ping", "-c 1", "8.8.8.8")
-		cmdOutput, err := cmd.CombinedOutput()
+	startTime := time.Now()
+	signal.Notify(exit, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGSTOP, syscall.SIGINT)
 
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "cannot check if internet is available")
-			continue
+	go func() {
+
+		if os.Geteuid() != 0 {
+			fmt.Fprintln(os.Stderr, "Not all processes could be identified, you would need root priviledges.")
+			os.Exit(1)
 		}
 
-		stringCmdOutput := string(cmdOutput)
-		if strings.Contains(stringCmdOutput, "ping: connect: Network is unreachable") { // No internet connection...
-			fmt.Println("no internet")
-			continue
+		internetIsAvailable := false
+
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
+		for ; !internetIsAvailable; <-ticker.C {
+
+			cmd := exec.Command("ping", "-c 1", "8.8.8.8")
+			cmdOutput, err := cmd.CombinedOutput()
+
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "internet does seems not to be available")
+				continue
+			}
+
+			stringCmdOutput := string(cmdOutput)
+			if strings.Contains(stringCmdOutput, "ping: connect: Network is unreachable") { // No internet connection...
+				fmt.Println("no internet")
+				continue
+			}
+
+			if strings.Contains(stringCmdOutput, "1 packets transmitted, 1 received") { // hurray!!!, internet here we go...
+				internetIsAvailable = true
+			}
 		}
 
-		if strings.Contains(stringCmdOutput, "1 packets transmitted, 1 received") { // hurray!!!, internet here we go...
-			internetIsAvailable = true
-		}
+		ticker.Stop()
+		networkCapture()
+	}()
 
-	}
+	<-done
+	close(done)
+	endTime := time.Now()
+	timeDiff := endTime.Sub(startTime)
+	account()
+	fmt.Printf("Time difference: %s\n", timeDiff)
 
-	ticker.Stop()
-	networkCapture()
 }
 
-func networkCapture() int {
+func networkCapture() {
+
 	openDevice := inUseInternetDeviceInterface()
 
 	var wg sync.WaitGroup
 	wg.Add(len(openDevice))
 
-	count := 0
 	for _, device := range openDevice {
 		newDevice := device
 		if handle := openNetworkDevice(newDevice); handle != nil {
 			newHandle := handle
 
-			count++
-			fmt.Printf("\n%d is fired.\n", count)
 			go func(handle *pcap.Handle, wg *sync.WaitGroup, device string) {
 				defer func() {
 					fmt.Println("this goroutine is comming to it end")
@@ -70,46 +101,47 @@ func networkCapture() int {
 				packSource := gopacket.NewPacketSource(handle, handle.LinkType())
 				for packet := range packSource.Packets() {
 
-					var (
-						srcIP      string
-						dstIP      string
-						protocol   string
-						srcPort    string
-						dstPort    string
-						packetSize = packet.Metadata().Length
-					)
+					allPacketReceived.Add(1)
 
-					// Handle IPv4 layer.
-					if ip4Layer := packet.Layer(layers.LayerTypeIPv4); ip4Layer != nil {
-						ip4, _ := ip4Layer.(*layers.IPv4)
+					var capturedPacket netowrkPacket
+					capturedPacket.packetSize = packet.Metadata().Length
 
-						srcIP = ip4.SrcIP.String()
-						dstIP = ip4.DstIP.String()
-						protocol = ip4.Protocol.String()
-
-						// Handle IPv6 layer.
-					} else if ip6Layer := packet.Layer(layers.LayerTypeIPv6); ip6Layer != nil {
+					// Handle IPv6 layer.
+					if ip6Layer := packet.Layer(layers.LayerTypeIPv6); ip6Layer != nil {
 						ip6, _ := ip6Layer.(*layers.IPv6)
 
-						srcIP = ip6.SrcIP.String()
-						dstIP = ip6.DstIP.String()
-						protocol = ip6.NextHeader.String()
+						capturedPacket.srcIP = ip6.SrcIP.String()
+						capturedPacket.dstIP = ip6.DstIP.String()
+						capturedPacket.protocol = ip6.NextHeader.String()
+
+						portInfo := handleTransportLayer(packet)
+						capturedPacket.srcPort = portInfo.SrcPort
+						capturedPacket.dstPort = portInfo.DstPort
+
+						go resolvePacketToProcess(capturedPacket)
+						continue
+
+						// Handle IPv4 layer.
+					} else if ip4Layer := packet.Layer(layers.LayerTypeIPv4); ip4Layer != nil {
+						ip4, _ := ip4Layer.(*layers.IPv4)
+
+						capturedPacket.srcIP = ip4.SrcIP.String()
+						capturedPacket.dstIP = ip4.DstIP.String()
+						capturedPacket.protocol = ip4.Protocol.String()
+
+						portInfo := handleTransportLayer(packet)
+						capturedPacket.srcPort = portInfo.SrcPort
+						capturedPacket.dstPort = portInfo.DstPort
+
+						go resolvePacketToProcess(capturedPacket)
+						continue
 
 						// Unknown
 					} else {
-						fmt.Printf("\n%s\nOTHER TYPE OF PACKET: \n%+v\n %s\n", strings.Repeat("-", 20), packet, strings.Repeat("-", 20))
+						fmt.Printf("\n%s\nOTHER TYPE OF PACKET: \n%+v\n %s\n", strings.Repeat("#", 20), packet, strings.Repeat("#", 20))
+						allPacketLost.Add(1)
 						continue
 					}
-
-					portInfo := handleTransportLayer(packet)
-					srcPort = portInfo.SrcPort
-					dstPort = portInfo.DstPort
-
-					fmt.Printf("%s\n", strings.Repeat("-", 7))
-					fmt.Printf("%s 😊: src :%s:%s -> dst: %s:%s\n", protocol, srcIP, srcPort, dstIP, dstPort)
-					fmt.Printf("packet from device: %s, the cost of fetching this packet is %d bytes\n", newDevice, packetSize)
-					fmt.Printf("%s\n", strings.Repeat("-", 7))
-
 				}
 
 			}(newHandle, &wg, newDevice)
@@ -119,12 +151,51 @@ func networkCapture() int {
 
 	fmt.Printf("waiting on %d interface\n", len(openDevice))
 	wg.Wait()
+
 	fmt.Println("Got to the end")
-	return count
+}
+
+func resolvePacketToProcess(capturedPacket netowrkPacket) {
+
+	allPacketGet.Add(1)
+
+	for _, p := range netStat() {
+		if (capturedPacket.srcIP == p.Ip &&
+			capturedPacket.srcPort == fmt.Sprintf("%d", p.Port) &&
+			capturedPacket.dstIP == p.ForeignIp &&
+			capturedPacket.dstPort == fmt.Sprintf("%d", p.ForeignPort)) || // request
+			(capturedPacket.srcIP == p.ForeignIp &&
+				capturedPacket.srcPort == fmt.Sprintf("%d", p.ForeignPort) &&
+				capturedPacket.dstIP == p.Ip &&
+				capturedPacket.dstPort == fmt.Sprintf("%d", p.Port)) { // response maybe...
+
+			// fmt.Printf("%s\n", strings.Repeat("-", 15))
+			// fmt.Printf("packet protocol is %s\n", capturedPacket.protocol)
+			// fmt.Printf("this packet belongs to %s\n", strings.ToUpper(strings.TrimSpace(p.Name)))
+			// fmt.Printf("PROCESS SIDE: %s 😊: local :%s:%s -> foreign: %s:%s\n", p.Name, p.Ip, fmt.Sprintf("%d", p.Port), p.ForeignIp, fmt.Sprintf("%d", p.ForeignPort))
+			// fmt.Printf("PACKET SIDE :%s 😊: src :%s:%s -> dst: %s:%s of size %d\n", capturedPacket.protocol, capturedPacket.srcIP, capturedPacket.srcPort, capturedPacket.dstIP, capturedPacket.dstPort, capturedPacket.packetSize)
+			// fmt.Printf("%s\n\n\n", strings.Repeat("-", 15))
+			allPacketAccounted.Add(1)
+			return
+		}
+	}
+
+	fmt.Printf("PACKET WASTED %s\n%s 😊: src :%s:%s -> dst: %s:%s of size %d\n%s\n\n\n", strings.Repeat("*", 15), capturedPacket.protocol, capturedPacket.srcIP, capturedPacket.srcPort, capturedPacket.dstIP, capturedPacket.dstPort, capturedPacket.packetSize, strings.Repeat("*", 15))
+	allPacketUnaccounted.Add(1)
+	return
 }
 
 type portInformation struct {
 	SrcPort, DstPort string
+}
+
+type netowrkPacket struct {
+	protocol,
+	srcIP,
+	dstIP,
+	srcPort,
+	dstPort string
+	packetSize int
 }
 
 func handleTransportLayer(packet gopacket.Packet) portInformation {
@@ -164,4 +235,23 @@ func openNetworkDevice(device string) *pcap.Handle {
 	return handle
 }
 
+func account() {
+	fmt.Printf("%s\n", strings.Repeat("-", 30))
+	fmt.Printf("Percantage Accounted for: %d\n", percentageCalc(&allPacketAccounted, &allPacketGet))
+	fmt.Printf("Percantage Unaccounted for: %d\n", percentageCalc(&allPacketUnaccounted, &allPacketGet))
+	fmt.Printf("Percantage Lost for: %d\n", percentageCalc(&allPacketLost, &allPacketGet))
+	fmt.Printf("All the packet we got %d\n", &allPacketReceived)
+	fmt.Printf("%s", strings.Repeat("-", 30))
+}
 
+func percentageCalc(dividend, divisor *atomic.Int64) int64 {
+	fmt.Println(dividend, divisor)
+	dividendValue := float64(dividend.Load())
+	divisorValue := float64(divisor.Load())
+
+	if divisorValue == 0 {
+		return 0 // Handle division by zero to avoid NaN
+	}
+
+	return int64((dividendValue / divisorValue) * 100)
+}
