@@ -11,11 +11,8 @@ import (
 )
 
 const (
-	stringPathToPRocNetFiles = "/proc/net/"
 	globaPatternMatchForIPv4 = "*[tu][cd][p]"
 	globaPatternMatchForIPv6 = "*[tu][cd][p]6"
-
-	globPattern = "/proc/net/{tcp*,udp*}"
 )
 
 // func main() {
@@ -73,8 +70,8 @@ func readProcNetFile(filepaths []string) []string {
 func procNetfilePaths() []string {
 
 	var filePaths []string
-	tcpAndudp, _ := filepath.Glob(filepath.Join("/proc/net/", globaPatternMatchForIPv4))
-	tcp6Andudp6, _ := filepath.Glob(filepath.Join("/proc/net/", globaPatternMatchForIPv6))
+	tcpAndudp, _ := filepath.Glob(filepath.Join("/proc/net/", globaPatternMatchForIPv4))   // for the lack of not being able to write a pattern that will
+	tcp6Andudp6, _ := filepath.Glob(filepath.Join("/proc/net/", globaPatternMatchForIPv6)) // match both... TODO
 	filePaths = append(tcpAndudp, tcp6Andudp6...)
 
 	return filePaths
@@ -149,8 +146,8 @@ func correlateProcessToSocket(socketLine string, allProcess *[]processInode, ch 
 	ch <- Process{uid, name, pid, exe, state, ip, port, fip, fport}
 
 }
+// remove empty data from array
 func removeEmpty(array []string) []string {
-	// remove empty data from line
 	var new_array []string
 	for _, i := range array {
 		if i != "" {
@@ -160,9 +157,9 @@ func removeEmpty(array []string) []string {
 	return new_array
 }
 
+// Convert the ipv4 to decimal. Have to rearrange the ip because the
+// default value is in little Endian order.
 func convertIp(ip string) string {
-	// Convert the ipv4 to decimal. Have to rearrange the ip because the
-	// default value is in little Endian order.
 
 	var out string
 
@@ -212,12 +209,14 @@ func hexToDec(h string) int64 {
 	return d
 }
 
+// returns string of the entry (a symlink) in /proc/<pid>/exe
 func getProcessExe(pid string) string {
 	exe := fmt.Sprintf("/proc/%s/exe", pid)
 	path, _ := os.Readlink(exe)
 	return path
 }
 
+// returns a Title string of the entry in /proc/<pid>/comm
 func getProcessName(pid string) string {
 	processName, _ := os.ReadFile(fmt.Sprintf("/proc/%s/comm", pid))
 	return strings.ToTitle(string(processName))
@@ -232,6 +231,7 @@ func getUser(uid string) string {
 	return u.Username
 }
 
+// Network state of Linux socket.
 var STATE = map[string]string{
 	"01": "ESTABLISHED",
 	"02": "SYN_SENT",
@@ -246,9 +246,9 @@ var STATE = map[string]string{
 	"0B": "CLOSING",
 }
 
+// Loop through all fd dirs of processes in `/proc“ to compare the inode
+// gotten from the socket and return the pid of the process.
 func findPid(inode string, processes *[]processInode) string {
-	// Loop through all fd dirs of process on /proc to compare the inode and
-	// get the pid.
 
 	pid := "-"
 	re := regexp.MustCompile(inode)
